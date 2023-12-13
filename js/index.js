@@ -1,64 +1,118 @@
 "use strict";
 const TILE_WIDTH = 20;
 const BOARD_SIZE = 30;
-const TICK_RATE = 70;
+const TICK_RATE = 10;
 const GAME_BOARD = document.getElementById("gameBoard");
+const PATH_BOARD = document.getElementById("pathBoard");
 const ctx = GAME_BOARD.getContext("2d");
+const path_ctx = PATH_BOARD.getContext("2d", { alpha: false });
 ctx.imageSmoothingEnabled = false;
 const spriteSheet = document.getElementById("spriteSheet");
-var previousTick = 0;
-var moveQueue = [];
-var gameOver = false;
-var gamePaused = false;
 var DIRECTION;
 (function (DIRECTION) {
-    DIRECTION[DIRECTION["RIGHT"] = 0] = "RIGHT";
-    DIRECTION[DIRECTION["UP"] = 1] = "UP";
-    DIRECTION[DIRECTION["LEFT"] = 2] = "LEFT";
-    DIRECTION[DIRECTION["DOWN"] = 3] = "DOWN";
+    DIRECTION["RIGHT"] = "RIGHT";
+    DIRECTION["UP"] = "UP";
+    DIRECTION["LEFT"] = "LEFT";
+    DIRECTION["DOWN"] = "DOWN";
 })(DIRECTION || (DIRECTION = {}));
+var previousTick = 0;
+var moveQueue = [DIRECTION.RIGHT];
+var gameOver = false;
+var gamePaused = false;
+var game_started = false;
 class GridSegment {
     direction;
     next_direction;
+    previous_direction;
     next_segment;
     previous_segment;
     current_spot = [0, 0];
-    constructor(direction, currentSpot, nextSegment) {
+    previous_spot = [0, 0];
+    just_tpd = false;
+    constructor(direction, current_spot, previous_segment) {
         this.direction = direction;
         this.next_direction = direction;
-        this.current_spot = currentSpot;
-        if (nextSegment) {
-            this.next_segment = nextSegment;
-            this.next_segment.previous_segment = this;
+        this.previous_direction = direction;
+        this.current_spot = current_spot;
+        this.previous_spot = [...current_spot];
+        if (previous_segment) {
+            this.previous_segment = previous_segment;
+            this.previous_segment.next_segment = this;
         }
     }
     move() {
+        this.just_tpd = false;
+        this.previous_spot = [...this.current_spot];
         switch (this.direction) {
             case DIRECTION.RIGHT:
                 this.current_spot[0]++;
-                if (this.current_spot[0] > BOARD_SIZE - 1)
+                if (this.current_spot[0] > BOARD_SIZE - 1) {
                     this.current_spot[0] = 0;
+                    this.just_tpd = true;
+                }
                 break;
             case DIRECTION.LEFT:
                 this.current_spot[0]--;
-                if (this.current_spot[0] < 0)
+                if (this.current_spot[0] < 0) {
                     this.current_spot[0] = BOARD_SIZE - 1;
+                    this.just_tpd = true;
+                }
                 break;
             case DIRECTION.UP:
                 this.current_spot[1]--;
-                if (this.current_spot[1] < 0)
+                if (this.current_spot[1] < 0) {
                     this.current_spot[1] = BOARD_SIZE - 1;
+                    this.just_tpd = true;
+                }
                 break;
             case DIRECTION.DOWN:
                 this.current_spot[1]++;
-                if (this.current_spot[1] > BOARD_SIZE - 1)
+                if (this.current_spot[1] > BOARD_SIZE - 1) {
                     this.current_spot[1] = 0;
+                    this.just_tpd = true;
+                }
                 break;
         }
     }
-    findFront() {
+    get front_spot() {
         const POS = [...this.current_spot];
         switch (this.direction) {
+            case DIRECTION.RIGHT:
+                POS[0]++;
+                break;
+            case DIRECTION.LEFT:
+                POS[0]--;
+                break;
+            case DIRECTION.UP:
+                POS[1]--;
+                break;
+            case DIRECTION.DOWN:
+                POS[1]++;
+                break;
+        }
+        return POS;
+    }
+    get behind_spot() {
+        const POS = [...this.current_spot];
+        switch (this.direction) {
+            case DIRECTION.LEFT:
+                POS[0]++;
+                break;
+            case DIRECTION.RIGHT:
+                POS[0]--;
+                break;
+            case DIRECTION.DOWN:
+                POS[1]--;
+                break;
+            case DIRECTION.UP:
+                POS[1]++;
+                break;
+        }
+        return POS;
+    }
+    get future_spot() {
+        const POS = [...this.current_spot];
+        switch (this.next_direction) {
             case DIRECTION.RIGHT:
                 POS[0]++;
                 break;
@@ -140,31 +194,44 @@ for (let j = 0; j < BOARD_SIZE; j++) {
 var snake_head_cell = new GridSegment(DIRECTION.RIGHT, [20, 20]);
 var snake_tail_cell = snake_head_cell;
 var apple = new GridSegment(DIRECTION.RIGHT, [0, 0]);
-addTail([21, 20]);
-addTail([22, 20]);
-addTail([23, 20]);
-addTail([24, 20]);
+addTail([19, 20]);
+addTail([18, 20]);
+addTail([17, 20]);
+addTail([16, 20]);
 function spawnApple() {
     let spots = structuredClone(BOARD_STATE);
+    spots[apple.current_spot[1]][apple.current_spot[0]][2] = 1;
     let currentSegment = snake_head_cell;
     while (currentSegment) {
-        spots[currentSegment.current_spot[1]].splice(currentSegment.current_spot[0], 1);
+        spots[currentSegment.current_spot[1]][currentSegment.current_spot[0]][2] = 1;
         currentSegment = currentSegment.next_segment;
     }
     let available = [];
     for (let i = 0; i < BOARD_SIZE; i++) {
         available = available.concat(spots[i]);
     }
+    for (let i = available.length - 1; i >= 0; i--) {
+        if (available[i][2] == 1) {
+            available.splice(i, 1);
+        }
+    }
     const APPLE_SPOT = available[Math.floor(Math.random() * available.length)];
-    apple.current_spot = APPLE_SPOT;
+    apple.current_spot = [APPLE_SPOT[0], APPLE_SPOT[1]];
 }
 spawnApple();
-function addTail(futureHeadSpot) {
-    let newHead = new GridSegment(snake_head_cell.direction, futureHeadSpot, snake_head_cell);
-    snake_head_cell = newHead;
+function addTail(tail_spot) {
+    tail_spot = tail_spot ?? snake_tail_cell.previous_spot;
+    let new_tail = new GridSegment(snake_tail_cell.previous_direction, tail_spot, snake_tail_cell);
+    snake_tail_cell = new_tail;
 }
-function drawBoard(time) {
-    let canMove = true;
+async function drawBoard(time) {
+    if (!game_started) {
+        path_ctx.fillStyle = "white";
+        path_ctx.fillRect(0, 0, 600, 600);
+        const moves = await findHamiltononianCycle(snake_head_cell.direction);
+        moveQueue.push(...moves);
+        game_started = true;
+    }
     if (gameOver)
         return;
     if (time - previousTick > TICK_RATE && !gamePaused) {
@@ -172,26 +239,22 @@ function drawBoard(time) {
         if (moveQueue.length > 0) {
             switch (moveQueue[0]) {
                 case DIRECTION.RIGHT:
-                    if (snake_head_cell.direction == DIRECTION.LEFT)
-                        break;
+                    // if (snake_head_cell.direction == DIRECTION.LEFT) break;
                     snake_head_cell.next_direction = DIRECTION.RIGHT;
                     snake_head_cell.direction = DIRECTION.RIGHT;
                     break;
                 case DIRECTION.UP:
-                    if (snake_head_cell.direction == DIRECTION.DOWN)
-                        break;
+                    // if (snake_head_cell.direction == DIRECTION.DOWN) break;
                     snake_head_cell.next_direction = DIRECTION.UP;
                     snake_head_cell.direction = DIRECTION.UP;
                     break;
                 case DIRECTION.LEFT:
-                    if (snake_head_cell.direction == DIRECTION.RIGHT)
-                        break;
+                    // if (snake_head_cell.direction == DIRECTION.RIGHT) break;
                     snake_head_cell.next_direction = DIRECTION.LEFT;
                     snake_head_cell.direction = DIRECTION.LEFT;
                     break;
                 case DIRECTION.DOWN:
-                    if (snake_head_cell.direction == DIRECTION.UP)
-                        break;
+                    // if (snake_head_cell.direction == DIRECTION.UP) break;
                     snake_head_cell.next_direction = DIRECTION.DOWN;
                     snake_head_cell.direction = DIRECTION.DOWN;
                     break;
@@ -203,48 +266,75 @@ function drawBoard(time) {
         requestAnimationFrame(drawBoard);
         return;
     }
+    const FUTURE = snake_head_cell.front_spot;
+    if (FUTURE[0] == apple.current_spot[0] && FUTURE[1] == apple.current_spot[1]) {
+        addTail();
+        spawnApple();
+        path_ctx.fillStyle = "white";
+        path_ctx.fillRect(0, 0, 600, 600);
+        // Draw the apple
+        ctx.drawImage(spriteSheet, SHEET["apple"].x, SHEET["apple"].y, 10, 10, apple.current_spot[0] * TILE_WIDTH, apple.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
+        const moves = await findHamiltononianCycle(snake_head_cell.direction);
+        if (moves.length == 0)
+            return;
+        moveQueue = moves;
+        // moveQueue.push(...moves);
+        // await delay(500);
+    }
     // Draw the board
     ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, TILE_WIDTH * BOARD_SIZE, TILE_WIDTH * BOARD_SIZE);
+    ctx.clearRect(0, 0, TILE_WIDTH * BOARD_SIZE, TILE_WIDTH * BOARD_SIZE);
     // for (let j = 0; j < BOARD_SIZE; j++) {
     // 	for (let i = 0; i < BOARD_SIZE; i++) {
     // 	}
     // }
-    const FUTURE = snake_head_cell.findFront();
-    if (FUTURE[0] == apple.current_spot[0] && FUTURE[1] == apple.current_spot[1]) {
-        addTail(FUTURE);
-        spawnApple();
-        canMove = false;
-    }
     // Draw the apple
     ctx.drawImage(spriteSheet, SHEET["apple"].x, SHEET["apple"].y, 10, 10, apple.current_spot[0] * TILE_WIDTH, apple.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
     // Draw and move the snake
-    ctx.fillStyle = "red";
-    ctx.strokeStyle = "red";
+    ctx.strokeStyle = "#00FF00";
     ctx.lineWidth = 12;
     ctx.lineJoin = "bevel";
     // ctx.lineCap = "round";
-    let currentSegment = snake_head_cell;
+    let curr_segment = snake_head_cell;
     ctx.beginPath();
-    while (currentSegment) {
-        if (canMove)
-            currentSegment.move();
-        if (currentSegment == snake_head_cell)
-            ctx.moveTo(snake_head_cell.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, snake_head_cell.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-        else
-            ctx.lineTo(currentSegment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, currentSegment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-        if (currentSegment.next_segment && canMove) {
-            currentSegment.next_segment.next_direction = currentSegment.direction;
+    while (curr_segment) {
+        curr_segment.move();
+        if (curr_segment == snake_head_cell)
+            ctx.moveTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+        if (curr_segment.previous_segment?.just_tpd) {
+            if (curr_segment.next_direction == curr_segment.direction && (curr_segment.next_direction != curr_segment.direction || !curr_segment.next_segment)) {
+                ctx.moveTo(curr_segment.front_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.front_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+            }
+            else {
+                ctx.moveTo(curr_segment.future_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.future_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+                ctx.lineTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+            }
+            ctx.fillStyle = "#5600ff"; // Blue portal
+            ctx.fillRect(curr_segment.current_spot[0] * TILE_WIDTH, curr_segment.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
         }
-        if (canMove)
-            currentSegment.direction = currentSegment.next_direction;
-        if (currentSegment != snake_head_cell &&
-            currentSegment.current_spot[0] == snake_head_cell.current_spot[0] &&
-            currentSegment.current_spot[1] == snake_head_cell.current_spot[1]) {
+        else if (curr_segment.just_tpd) {
+            ctx.lineTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+            ctx.lineTo(curr_segment.behind_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.behind_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+            ctx.fillStyle = "#fd6600"; // Orange portal
+            ctx.fillRect(curr_segment.current_spot[0] * TILE_WIDTH, curr_segment.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
+        }
+        else if (curr_segment.next_direction != curr_segment.direction || !curr_segment.next_segment) {
+            // ctx.fillStyle = "green";
+            // ctx.fillRect(curr_segment.current_spot[0] * TILE_WIDTH, curr_segment.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
+            ctx.lineTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
+        }
+        if (curr_segment.next_segment) {
+            curr_segment.next_segment.next_direction = curr_segment.direction;
+        }
+        curr_segment.previous_direction = curr_segment.direction;
+        curr_segment.direction = curr_segment.next_direction;
+        if (curr_segment != snake_head_cell &&
+            curr_segment.current_spot[0] == snake_head_cell.current_spot[0] &&
+            curr_segment.current_spot[1] == snake_head_cell.current_spot[1]) {
             console.log("Game over");
             gameOver = true;
         }
-        currentSegment = currentSegment.next_segment;
+        curr_segment = curr_segment.next_segment;
     }
     ctx.stroke();
     if (!gameOver)
@@ -253,6 +343,7 @@ function drawBoard(time) {
         snake_head_cell.next_segment.drawDead();
     requestAnimationFrame(drawBoard);
 }
+createGraph();
 requestAnimationFrame(drawBoard);
 document.addEventListener("keydown", (event) => {
     if (event.repeat)

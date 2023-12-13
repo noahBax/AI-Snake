@@ -6,8 +6,12 @@
     <title>AI Snake</title>
     <!-- <script src="js/CCapture.all.min.js"></script> -->
     <style>
-        #gameBoard {
+        #gameBoard, #pathBoard {
             border: 1px solid black;
+            position: absolute;
+        }
+        body {
+            margin: 0px;
         }
         #spriteSheet {
             display: none;
@@ -15,6 +19,7 @@
     </style>
 </head>
 <body>
+    <canvas id="pathBoard" width="600" height="600"></canvas>
     <canvas id="gameBoard" width="600" height="600"></canvas>
     <img src="spritesheet.png" id="spriteSheet">
     <script src="js/sheet.js"></script>
