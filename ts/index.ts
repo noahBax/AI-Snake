@@ -1,14 +1,42 @@
-const TILE_WIDTH = 20;
-const BOARD_SIZE = 30;
-const TICK_RATE = 10;
+import { drawBoard, move_queue } from "./drawBoard.js";
+import { createGraph } from "./findCycle.js";
+import { GraphNode } from "./graphNode.js";
+import { SnakePathingNode } from "./snakePathNode.js";
+import { SnakeSegment } from "./snakeSegment.js";
 
-const GAME_BOARD = document.getElementById("gameBoard") as HTMLCanvasElement;
-const PATH_BOARD = document.getElementById("pathBoard") as HTMLCanvasElement;
-const ctx = GAME_BOARD.getContext("2d");
-const path_ctx = PATH_BOARD.getContext("2d", { alpha: false });
-ctx.imageSmoothingEnabled = false;
+export const TILE_WIDTH = 36;
+export const BOARD_SIZE = 10;
+export const TICK_RATE = 0//32;
 
-const spriteSheet = document.getElementById("spriteSheet") as HTMLImageElement;
+export var GAME_BOARD: HTMLCanvasElement;
+export var PATH_BOARD: HTMLCanvasElement;
+export var PHANTOM_BOARD: HTMLCanvasElement;
+export var ctx: CanvasRenderingContext2D;
+export var path_ctx: CanvasRenderingContext2D;
+export var phantom_ctx: CanvasRenderingContext2D;
+export var snake_length = 1;
+
+export const LOGGING = false;
+
+export var sprite_sheet: HTMLImageElement;
+
+export default interface InterfaceWindow extends Window {
+	snake_length: number;
+}
+
+declare global {
+	interface Window { 
+		snake_length: number;
+		last_fuckup: SnakePathingNode;
+		snake_head_cell: SnakeSegment;
+		snake_tail_cell: SnakeSegment;
+		snake_canvas: HTMLCanvasElement;
+		move_queue: DIRECTION[];
+		board_graph: GraphNode[];
+	}
+}
+
+window.snake_length = snake_length;
 
 enum DIRECTION {
 	RIGHT = "RIGHT",
@@ -16,397 +44,112 @@ enum DIRECTION {
 	LEFT = "LEFT",
 	DOWN = "DOWN"
 }
+export { DIRECTION };
 
-var previousTick = 0;
-var moveQueue = [DIRECTION.RIGHT];
-var gameOver = false;
-var gamePaused = false;
-var game_started = false;
+export var game_slow = false;
+export var draw_search = true;
 
+var board_state: [number, number, 0 | 1][] = [];
 
-class GridSegment {
-	direction: DIRECTION;
-	next_direction: DIRECTION;
-	previous_direction: DIRECTION;
-	next_segment: GridSegment;
-	previous_segment: GridSegment;
-	current_spot: [number, number] = [0, 0];
-	previous_spot: [number, number] = [0, 0];
-	just_tpd = false;
+export var snake_head_cell: SnakeSegment;
+export var snake_tail_cell: SnakeSegment;
+export var apple: SnakeSegment;
 
-	constructor(direction: DIRECTION, current_spot: [number, number], previous_segment?: GridSegment) {
-		this.direction = direction;
-		this.next_direction = direction;
-		this.previous_direction = direction;
-		this.current_spot = current_spot;
-		this.previous_spot = [...current_spot];
-		if (previous_segment) {
-			this.previous_segment = previous_segment;
-			this.previous_segment.next_segment = this;
-		}
-	}
+export var game_paused = false;
 
-	move() {
-		this.just_tpd = false;
-		this.previous_spot = [...this.current_spot];
-		switch(this.direction) {
-			case DIRECTION.RIGHT:
-				this.current_spot[0] ++;
-				if (this.current_spot[0] > BOARD_SIZE - 1) {
-					this.current_spot[0] = 0;
-					this.just_tpd = true;
-				}
-				break;
-			case DIRECTION.LEFT:
-				this.current_spot[0] --;
-				if (this.current_spot[0] < 0) {
-					this.current_spot[0] = BOARD_SIZE - 1;
-					this.just_tpd = true;
-				}
-				break;
-			case DIRECTION.UP:
-				this.current_spot[1] --;
-				if (this.current_spot[1] < 0) {
-					this.current_spot[1] = BOARD_SIZE - 1;
-					this.just_tpd = true;
-				}
-				break;
-			case DIRECTION.DOWN:
-				this.current_spot[1] ++;
-				if (this.current_spot[1] > BOARD_SIZE - 1) {
-					this.current_spot[1] = 0;
-					this.just_tpd = true;
-				}
-				break;
-		}
-	}
+export function spawnApple() {
 
-	get front_spot(): [number, number] {
-		const POS: [number, number] = [...this.current_spot];
+	let available: [number, number, 0 | 1][] = [...board_state];
+	available[apple.location_as_index][2] = 1;
+
+	let current_segment = snake_head_cell;
+	while (current_segment) {
+
+		available[current_segment.location_as_index][2] = 1;
 		
-		switch(this.direction) {
-			case DIRECTION.RIGHT:
-				POS[0] ++;
-				break;
-			case DIRECTION.LEFT:
-				POS[0] --;
-				break;
-			case DIRECTION.UP:
-				POS[1] --;
-				break;
-			case DIRECTION.DOWN:
-				POS[1] ++;
-				break;
-		}
-
-
-		return POS;
+		current_segment = current_segment.next_segment;
 	}
 
 
-	get behind_spot(): [number, number] {
-		const POS: [number, number] = [...this.current_spot];
-		
-		switch(this.direction) {
-			case DIRECTION.LEFT:
-				POS[0] ++;
-				break;
-			case DIRECTION.RIGHT:
-				POS[0] --;
-				break;
-			case DIRECTION.DOWN:
-				POS[1] --;
-				break;
-			case DIRECTION.UP:
-				POS[1] ++;
-				break;
-		}
-
-
-		return POS;
-	}
-
-	get future_spot(): [number, number] {
-		const POS: [number, number] = [...this.current_spot];
-		
-		switch(this.next_direction) {
-			case DIRECTION.RIGHT:
-				POS[0] ++;
-				break;
-			case DIRECTION.LEFT:
-				POS[0] --;
-				break;
-			case DIRECTION.UP:
-				POS[1] --;
-				break;
-			case DIRECTION.DOWN:
-				POS[1] ++;
-				break;
-		}
-
-
-		return POS;
-	}
-
-	draw() {
-		let sprite: sprites = "vertical";
-		
-		if (this == snake_head_cell) {
-			switch(this.direction) {
-				case DIRECTION.RIGHT:
-					sprite = "right";
-					break;
-				case DIRECTION.LEFT:
-					sprite = "left";
-					break;
-				case DIRECTION.UP:
-					sprite = "up";
-					break;
-				case DIRECTION.DOWN:
-					sprite = "down";
-					break;
-			}
-		} else {
-			if (this.direction == DIRECTION.RIGHT || this.direction == DIRECTION.LEFT) {
-				sprite = "horizontal";
-				if (this.next_direction == DIRECTION.UP) {
-					sprite = this.direction == DIRECTION.RIGHT ? "90" : "0"
-				} else if (this.next_direction == DIRECTION.DOWN) {
-					sprite = this.direction == DIRECTION.RIGHT ? "180" : "270"
-				}
-			} else {
-				sprite = "vertical";
-				if (this.next_direction == DIRECTION.RIGHT) {
-					sprite = this.direction == DIRECTION.UP ? "270" : "0"
-				} else if (this.next_direction == DIRECTION.LEFT) {
-					sprite = this.direction == DIRECTION.UP ? "180" : "90"
-				}
-			}
-		}
-
-		ctx.drawImage(spriteSheet, SHEET[sprite].x, SHEET[sprite].y, 10, 10, this.current_spot[0] * TILE_WIDTH, this.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-	}
-
-	drawDead() {
-		let sprite: sprites = "deadRight";
-
-		switch(this.direction) {
-			case DIRECTION.LEFT:
-				sprite = "deadLeft";
-				break;
-			case DIRECTION.UP:
-				sprite = "deadUp";
-				break;
-			case DIRECTION.DOWN:
-				sprite = "deadDown";
-				break;
-		}
-
-		ctx.drawImage(spriteSheet, SHEET[sprite].x, SHEET[sprite].y, 10, 10, this.current_spot[0] * TILE_WIDTH, this.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-	}
-}
-
-const BOARD_STATE: [number, number, 0 | 1][][] = [];
-
-for (let j = 0; j < BOARD_SIZE; j++) {
-	BOARD_STATE.push([]);
-	for (let i = 0; i < BOARD_SIZE; i++) {
-		BOARD_STATE[j].push([i, j, 0]);
-	}
-}
-
-var snake_head_cell = new GridSegment(DIRECTION.RIGHT, [20, 20]);
-var snake_tail_cell = snake_head_cell;
-
-var apple = new GridSegment(DIRECTION.RIGHT, [0, 0]);
-
-addTail([19, 20]);
-addTail([18, 20]);
-addTail([17, 20]);
-addTail([16, 20]);
-
-function spawnApple() {
-	let spots = structuredClone(BOARD_STATE);
-	spots[apple.current_spot[1]][apple.current_spot[0]][2] = 1;
-	let currentSegment = snake_head_cell;
-	while (currentSegment) {
-
-		spots[currentSegment.current_spot[1]][currentSegment.current_spot[0]][2] = 1;
-		
-		currentSegment = currentSegment.next_segment;
-	}
-
-	let available: [number, number, 0 | 1][] = [];
-	for (let i = 0; i < BOARD_SIZE; i++) {
-		available = available.concat(spots[i]);
-	}
-
+	// Remove the snake parts from the available pool
 	for (let i = available.length - 1; i >= 0; i--) {
 		if (available[i][2] == 1) {
 			available.splice(i, 1);
 		} 
 	}
 
-	const APPLE_SPOT = available[Math.floor(Math.random() * available.length)];
+	let apple_spot: [number, number, 0 | 1] = available[Math.floor(Math.random() * available.length)];
 
-	apple.current_spot = [APPLE_SPOT[0], APPLE_SPOT[1]];
+	if (!apple_spot) apple_spot = available[snake_tail_cell.location_as_index];
+	apple.current_spot = [apple_spot[0], apple_spot[1]];
+
+	// Restore the board_state (not a deep copy soo)
+	board_state.forEach( b => b[2] = 0);
 }
 
-spawnApple();
-
-function addTail(tail_spot?: [number, number]) {
+export function addTail(tail_spot?: [number, number]) {
+	snake_length++;
+	window.snake_length++;
 	tail_spot = tail_spot ?? snake_tail_cell.previous_spot;
-	let new_tail = new GridSegment(snake_tail_cell.previous_direction, tail_spot, snake_tail_cell);
+	let new_tail = new SnakeSegment(snake_tail_cell.previous_direction, tail_spot, snake_tail_cell);
 	snake_tail_cell = new_tail;
+	window.snake_tail_cell = new_tail;
 }
 
-
-async function drawBoard(time: number) {
-
-	if (!game_started) {
-		path_ctx.fillStyle = "white";
-		path_ctx.fillRect(0, 0, 600, 600);
-		const moves = await findHamiltononianCycle(snake_head_cell.direction);
-		moveQueue.push(...moves);
-		game_started = true;
-	}
-
-	if (gameOver) return;
-
-	if (time - previousTick > TICK_RATE && !gamePaused) {
-		previousTick = time;
-		if (moveQueue.length > 0) {
-			switch (moveQueue[0]) {
-				case DIRECTION.RIGHT:
-					// if (snake_head_cell.direction == DIRECTION.LEFT) break;
-					snake_head_cell.next_direction = DIRECTION.RIGHT;
-					snake_head_cell.direction = DIRECTION.RIGHT;
-					break;
-				case DIRECTION.UP:
-					// if (snake_head_cell.direction == DIRECTION.DOWN) break;
-					snake_head_cell.next_direction = DIRECTION.UP;
-					snake_head_cell.direction = DIRECTION.UP;
-					break;
-				case DIRECTION.LEFT:
-					// if (snake_head_cell.direction == DIRECTION.RIGHT) break;
-					snake_head_cell.next_direction = DIRECTION.LEFT;
-					snake_head_cell.direction = DIRECTION.LEFT;
-					break;
-				case DIRECTION.DOWN:
-					// if (snake_head_cell.direction == DIRECTION.UP) break;
-					snake_head_cell.next_direction = DIRECTION.DOWN;
-					snake_head_cell.direction = DIRECTION.DOWN;
-					break;
-			}
-		}
-		moveQueue.splice(0, 1);
-	} else {
-		requestAnimationFrame(drawBoard);
-		return;
-	}
-
-	const FUTURE = snake_head_cell.front_spot;
-	if (FUTURE[0] == apple.current_spot[0] && FUTURE[1] == apple.current_spot[1]) {
-		addTail();
-		spawnApple();
-		path_ctx.fillStyle = "white";
-		path_ctx.fillRect(0, 0, 600, 600);
-		// Draw the apple
-		ctx.drawImage(spriteSheet, SHEET["apple"].x, SHEET["apple"].y, 10, 10, apple.current_spot[0] * TILE_WIDTH, apple.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-		const moves = await findHamiltononianCycle(snake_head_cell.direction);
-		if (moves.length == 0) return;
-		moveQueue = moves;
-		// moveQueue.push(...moves);
-		// await delay(500);
-	}
-
-	// Draw the board
-	ctx.fillStyle = "white";
-	ctx.clearRect(0, 0, TILE_WIDTH * BOARD_SIZE, TILE_WIDTH * BOARD_SIZE);
-	// for (let j = 0; j < BOARD_SIZE; j++) {
-	// 	for (let i = 0; i < BOARD_SIZE; i++) {
-	// 	}
-	// }
+export const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 
-	// Draw the apple
-	ctx.drawImage(spriteSheet, SHEET["apple"].x, SHEET["apple"].y, 10, 10, apple.current_spot[0] * TILE_WIDTH, apple.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-
-	// Draw and move the snake
-	ctx.strokeStyle = "#00FF00";
-	ctx.lineWidth = 12;
-	ctx.lineJoin = "bevel";
-	// ctx.lineCap = "round";
-	let curr_segment = snake_head_cell;
-	ctx.beginPath();
-	while (curr_segment) {
-		curr_segment.move();
-		if (curr_segment == snake_head_cell) ctx.moveTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-		if (curr_segment.previous_segment?.just_tpd) {
-			if (curr_segment.next_direction == curr_segment.direction && (curr_segment.next_direction != curr_segment.direction || !curr_segment.next_segment)) {
-				ctx.moveTo(curr_segment.front_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.front_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-			} else {
-				ctx.moveTo(curr_segment.future_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.future_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-				ctx.lineTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-			}
-			ctx.fillStyle = "#5600ff"; // Blue portal
-			ctx.fillRect(curr_segment.current_spot[0] * TILE_WIDTH, curr_segment.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-		} else if (curr_segment.just_tpd) {
-			ctx.lineTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-			ctx.lineTo(curr_segment.behind_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.behind_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-			ctx.fillStyle = "#fd6600"; // Orange portal
-			ctx.fillRect(curr_segment.current_spot[0] * TILE_WIDTH, curr_segment.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-		} else if (curr_segment.next_direction != curr_segment.direction || !curr_segment.next_segment) {
-			
-			// ctx.fillStyle = "green";
-			// ctx.fillRect(curr_segment.current_spot[0] * TILE_WIDTH, curr_segment.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-			ctx.lineTo(curr_segment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, curr_segment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-		}
-		if (curr_segment.next_segment) {
-			curr_segment.next_segment.next_direction = curr_segment.direction;
-		}
-		curr_segment.previous_direction = curr_segment.direction;
-		curr_segment.direction = curr_segment.next_direction;
-		
-		if (
-			curr_segment != snake_head_cell &&
-			curr_segment.current_spot[0] == snake_head_cell.current_spot[0] &&
-			curr_segment.current_spot[1] == snake_head_cell.current_spot[1] ) {
-
-			console.log("Game over");
-			gameOver = true;
-		}
-
-		curr_segment = curr_segment.next_segment;
-	}
-
-	ctx.stroke();
+function init() {
+	snake_head_cell = new SnakeSegment(DIRECTION.RIGHT, [1, 1]);
+	snake_tail_cell = snake_head_cell;
 	
-	if (!gameOver) snake_head_cell.draw();
-	else snake_head_cell.next_segment.drawDead();
+	for (let j = 0; j < BOARD_SIZE; j++) {
+		for (let i = 0; i < BOARD_SIZE; i++) {
+			board_state.push([i, j, 0]);
+		}
+	}
+	
+	apple = new SnakeSegment(DIRECTION.RIGHT, [0, 0]);
 
+	spawnApple();
+
+	createGraph();
+	
+	GAME_BOARD = document.getElementById("gameBoard") as HTMLCanvasElement;
+	PATH_BOARD = document.getElementById("pathBoard") as HTMLCanvasElement;
+	PHANTOM_BOARD = document.getElementById("phantomBoard") as HTMLCanvasElement;
+	window.snake_canvas = GAME_BOARD;
+	ctx = GAME_BOARD.getContext("2d");
+	path_ctx = PATH_BOARD.getContext("2d", { alpha: false });
+	phantom_ctx = PHANTOM_BOARD.getContext("2d");
+	
+	ctx.imageSmoothingEnabled = false;
+	
+	sprite_sheet = document.getElementById("spriteSheet") as HTMLImageElement;
+	
 	requestAnimationFrame(drawBoard);
 }
 
-createGraph();
-requestAnimationFrame(drawBoard);
+init();
 
+
+// Establish event listeners for manual controls
 document.addEventListener("keydown", (event) => {
 	if (event.repeat) return;
 	switch (event.key) {
 		case "ArrowRight":
-			moveQueue.push(DIRECTION.RIGHT);
+			move_queue.push(DIRECTION.RIGHT);
 			break;
 		case "ArrowUp":
-			moveQueue.push(DIRECTION.UP);
+			move_queue.push(DIRECTION.UP);
 			break;
 		case "ArrowLeft":
-			moveQueue.push(DIRECTION.LEFT);
+			move_queue.push(DIRECTION.LEFT);
 			break;
 		case "ArrowDown":
-			moveQueue.push(DIRECTION.DOWN);
+			move_queue.push(DIRECTION.DOWN);
 			break;
 		case "Escape":
-			gamePaused = !gamePaused;
+			game_paused = !game_paused;
 	}
 })
