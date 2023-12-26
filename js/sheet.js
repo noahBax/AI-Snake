@@ -1,4 +1,3 @@
-"use strict";
 const SHEET = {
     "0": {
         "x": 1,
@@ -61,3 +60,4 @@ const SHEET = {
         "y": 37
     }
 };
+export { SHEET };

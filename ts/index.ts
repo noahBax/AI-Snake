@@ -1,302 +1,155 @@
-const TILE_WIDTH = 20;
-const BOARD_SIZE = 30;
-const TICK_RATE = 70;
+import { drawBoard, move_queue } from "./drawBoard.js";
+import { createGraph } from "./findCycle.js";
+import { GraphNode } from "./graphNode.js";
+import { SnakePathingNode } from "./snakePathNode.js";
+import { SnakeSegment } from "./snakeSegment.js";
 
-const GAME_BOARD = document.getElementById("gameBoard") as HTMLCanvasElement;
-const ctx = GAME_BOARD.getContext("2d");
-ctx.imageSmoothingEnabled = false;
+export const TILE_WIDTH = 36;
+export const BOARD_SIZE = 10;
+export const TICK_RATE = 0//32;
 
-const spriteSheet = document.getElementById("spriteSheet") as HTMLImageElement;
+export var GAME_BOARD: HTMLCanvasElement;
+export var PATH_BOARD: HTMLCanvasElement;
+export var PHANTOM_BOARD: HTMLCanvasElement;
+export var ctx: CanvasRenderingContext2D;
+export var path_ctx: CanvasRenderingContext2D;
+export var phantom_ctx: CanvasRenderingContext2D;
+export var snake_length = 1;
 
-var previousTick = 0;
-var moveQueue = [];
-var gameOver = false;
-var gamePaused = false;
+export const LOGGING = false;
+
+export var sprite_sheet: HTMLImageElement;
+
+export default interface InterfaceWindow extends Window {
+	snake_length: number;
+}
+
+declare global {
+	interface Window { 
+		snake_length: number;
+		last_fuckup: SnakePathingNode;
+		snake_head_cell: SnakeSegment;
+		snake_tail_cell: SnakeSegment;
+		snake_canvas: HTMLCanvasElement;
+		move_queue: DIRECTION[];
+		board_graph: GraphNode[];
+	}
+}
+
+window.snake_length = snake_length;
 
 enum DIRECTION {
-	RIGHT,
-	UP,
-	LEFT,
-	DOWN
+	RIGHT = "RIGHT",
+	UP = "UP",
+	LEFT = "LEFT",
+	DOWN = "DOWN"
 }
+export { DIRECTION };
 
-class GridSegment {
-	direction: DIRECTION;
-	next_direction: DIRECTION;
-	next_segment: GridSegment;
-	previous_segment: GridSegment;
-	current_spot: [number, number] = [0, 0];
+export var game_slow = false;
+export var draw_search = true;
 
-	constructor(direction: DIRECTION, currentSpot: [number, number], nextSegment?: GridSegment) {
-		this.direction = direction;
-		this.next_direction = direction;
-		this.current_spot = currentSpot;
-		if (nextSegment) {
-			this.next_segment = nextSegment;
-			this.next_segment.previous_segment = this;
-		}
-	}
+var board_state: [number, number, 0 | 1][] = [];
 
-	move() {
-		switch(this.direction) {
-			case DIRECTION.RIGHT:
-				this.current_spot[0] ++;
-				if (this.current_spot[0] > BOARD_SIZE - 1) this.current_spot[0] = 0;
-				break;
-			case DIRECTION.LEFT:
-				this.current_spot[0] --;
-				if (this.current_spot[0] < 0) this.current_spot[0] = BOARD_SIZE - 1;
-				break;
-			case DIRECTION.UP:
-				this.current_spot[1] --;
-				if (this.current_spot[1] < 0) this.current_spot[1] = BOARD_SIZE - 1;
-				break;
-			case DIRECTION.DOWN:
-				this.current_spot[1] ++;
-				if (this.current_spot[1] > BOARD_SIZE - 1) this.current_spot[1] = 0;
-				break;
-		}
-	}
+export var snake_head_cell: SnakeSegment;
+export var snake_tail_cell: SnakeSegment;
+export var apple: SnakeSegment;
 
-	findFront(): [number, number] {
-		const POS: [number, number] = [...this.current_spot];
+export var game_paused = false;
+
+export function spawnApple() {
+
+	let available: [number, number, 0 | 1][] = [...board_state];
+	available[apple.location_as_index][2] = 1;
+
+	let current_segment = snake_head_cell;
+	while (current_segment) {
+
+		available[current_segment.location_as_index][2] = 1;
 		
-		switch(this.direction) {
-			case DIRECTION.RIGHT:
-				POS[0] ++;
-				break;
-			case DIRECTION.LEFT:
-				POS[0] --;
-				break;
-			case DIRECTION.UP:
-				POS[1] --;
-				break;
-			case DIRECTION.DOWN:
-				POS[1] ++;
-				break;
-		}
-
-
-		return POS;
+		current_segment = current_segment.next_segment;
 	}
 
-	draw() {
-		let sprite: sprites = "vertical";
-		
-		if (this == snake_head_cell) {
-			switch(this.direction) {
-				case DIRECTION.RIGHT:
-					sprite = "right";
-					break;
-				case DIRECTION.LEFT:
-					sprite = "left";
-					break;
-				case DIRECTION.UP:
-					sprite = "up";
-					break;
-				case DIRECTION.DOWN:
-					sprite = "down";
-					break;
-			}
-		} else {
-			if (this.direction == DIRECTION.RIGHT || this.direction == DIRECTION.LEFT) {
-				sprite = "horizontal";
-				if (this.next_direction == DIRECTION.UP) {
-					sprite = this.direction == DIRECTION.RIGHT ? "90" : "0"
-				} else if (this.next_direction == DIRECTION.DOWN) {
-					sprite = this.direction == DIRECTION.RIGHT ? "180" : "270"
-				}
-			} else {
-				sprite = "vertical";
-				if (this.next_direction == DIRECTION.RIGHT) {
-					sprite = this.direction == DIRECTION.UP ? "270" : "0"
-				} else if (this.next_direction == DIRECTION.LEFT) {
-					sprite = this.direction == DIRECTION.UP ? "180" : "90"
-				}
-			}
-		}
 
-		ctx.drawImage(spriteSheet, SHEET[sprite].x, SHEET[sprite].y, 10, 10, this.current_spot[0] * TILE_WIDTH, this.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
+	// Remove the snake parts from the available pool
+	for (let i = available.length - 1; i >= 0; i--) {
+		if (available[i][2] == 1) {
+			available.splice(i, 1);
+		} 
 	}
 
-	drawDead() {
-		let sprite: sprites = "deadRight";
+	let apple_spot: [number, number, 0 | 1] = available[Math.floor(Math.random() * available.length)];
 
-		switch(this.direction) {
-			case DIRECTION.LEFT:
-				sprite = "deadLeft";
-				break;
-			case DIRECTION.UP:
-				sprite = "deadUp";
-				break;
-			case DIRECTION.DOWN:
-				sprite = "deadDown";
-				break;
-		}
+	if (!apple_spot) apple_spot = available[snake_tail_cell.location_as_index];
+	apple.current_spot = [apple_spot[0], apple_spot[1]];
 
-		ctx.drawImage(spriteSheet, SHEET[sprite].x, SHEET[sprite].y, 10, 10, this.current_spot[0] * TILE_WIDTH, this.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-	}
+	// Restore the board_state (not a deep copy soo)
+	board_state.forEach( b => b[2] = 0);
 }
 
-const BOARD_STATE: [number, number, number][][] = [];
-
-for (let j = 0; j < BOARD_SIZE; j++) {
-	BOARD_STATE.push([]);
-	for (let i = 0; i < BOARD_SIZE; i++) {
-		BOARD_STATE[j].push([i, j, 0]);
-	}
+export function addTail(tail_spot?: [number, number]) {
+	snake_length++;
+	window.snake_length++;
+	tail_spot = tail_spot ?? snake_tail_cell.previous_spot;
+	let new_tail = new SnakeSegment(snake_tail_cell.previous_direction, tail_spot, snake_tail_cell);
+	snake_tail_cell = new_tail;
+	window.snake_tail_cell = new_tail;
 }
 
-var snake_head_cell = new GridSegment(DIRECTION.RIGHT, [20, 20]);
-var snake_tail_cell = snake_head_cell;
-
-var apple = new GridSegment(DIRECTION.RIGHT, [0, 0]);
-
-addTail([21, 20]);
-addTail([22, 20]);
-addTail([23, 20]);
-addTail([24, 20]);
-
-function spawnApple() {
-	let spots = structuredClone(BOARD_STATE);
-	let currentSegment = snake_head_cell;
-	while (currentSegment) {
-
-		spots[currentSegment.current_spot[1]].splice(currentSegment.current_spot[0], 1);
-		
-		currentSegment = currentSegment.next_segment;
-	}
-
-	let available = [];
-	for (let i = 0; i < BOARD_SIZE; i++) {
-		available = available.concat(spots[i]);
-	}
-
-	const APPLE_SPOT = available[Math.floor(Math.random() * available.length)];
-
-	apple.current_spot = APPLE_SPOT;
-}
-
-spawnApple();
-
-function addTail(futureHeadSpot: [number, number]) {
-
-	let newHead = new GridSegment(snake_head_cell.direction, futureHeadSpot, snake_head_cell);
-	snake_head_cell = newHead;
-}
+export const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 
-function drawBoard(time: number) {
-
-	let canMove = true;
-
-	if (gameOver) return;
-
-	if (time - previousTick > TICK_RATE && !gamePaused) {
-		previousTick = time;
-		if (moveQueue.length > 0) {
-			switch (moveQueue[0]) {
-				case DIRECTION.RIGHT:
-					if (snake_head_cell.direction == DIRECTION.LEFT) break;
-					snake_head_cell.next_direction = DIRECTION.RIGHT;
-					snake_head_cell.direction = DIRECTION.RIGHT;
-					break;
-				case DIRECTION.UP:
-					if (snake_head_cell.direction == DIRECTION.DOWN) break;
-					snake_head_cell.next_direction = DIRECTION.UP;
-					snake_head_cell.direction = DIRECTION.UP;
-					break;
-				case DIRECTION.LEFT:
-					if (snake_head_cell.direction == DIRECTION.RIGHT) break;
-					snake_head_cell.next_direction = DIRECTION.LEFT;
-					snake_head_cell.direction = DIRECTION.LEFT;
-					break;
-				case DIRECTION.DOWN:
-					if (snake_head_cell.direction == DIRECTION.UP) break;
-					snake_head_cell.next_direction = DIRECTION.DOWN;
-					snake_head_cell.direction = DIRECTION.DOWN;
-					break;
-			}
-		}
-		moveQueue.splice(0, 1);
-	} else {
-		requestAnimationFrame(drawBoard);
-		return;
-	}
-
-	// Draw the board
-	ctx.fillStyle = "white";
-	ctx.fillRect(0, 0, TILE_WIDTH * BOARD_SIZE, TILE_WIDTH * BOARD_SIZE);
-	// for (let j = 0; j < BOARD_SIZE; j++) {
-	// 	for (let i = 0; i < BOARD_SIZE; i++) {
-	// 	}
-	// }
-
-	const FUTURE = snake_head_cell.findFront();
-	if (FUTURE[0] == apple.current_spot[0] && FUTURE[1] == apple.current_spot[1]) {
-		addTail(FUTURE);
-		spawnApple();
-		canMove = false;
-	}
-
-	// Draw the apple
-	ctx.drawImage(spriteSheet, SHEET["apple"].x, SHEET["apple"].y, 10, 10, apple.current_spot[0] * TILE_WIDTH, apple.current_spot[1] * TILE_WIDTH, TILE_WIDTH, TILE_WIDTH);
-
-	// Draw and move the snake
-	ctx.fillStyle = "red";
-	ctx.strokeStyle = "red";
-	ctx.lineWidth = 12;
-	ctx.lineJoin = "bevel";
-	// ctx.lineCap = "round";
-	let currentSegment = snake_head_cell;
-	ctx.beginPath();
-	while (currentSegment) {
-		if (canMove) currentSegment.move();
-		if (currentSegment == snake_head_cell) ctx.moveTo(snake_head_cell.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, snake_head_cell.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-		else ctx.lineTo(currentSegment.current_spot[0] * TILE_WIDTH + TILE_WIDTH / 2, currentSegment.current_spot[1] * TILE_WIDTH + TILE_WIDTH / 2);
-		if (currentSegment.next_segment && canMove) {
-			currentSegment.next_segment.next_direction = currentSegment.direction;
-		}
-		if (canMove) currentSegment.direction = currentSegment.next_direction;
-		
-		if (
-			currentSegment != snake_head_cell &&
-			currentSegment.current_spot[0] == snake_head_cell.current_spot[0] &&
-			currentSegment.current_spot[1] == snake_head_cell.current_spot[1] ) {
-
-			console.log("Game over");
-			gameOver = true;
-		}
-
-		currentSegment = currentSegment.next_segment;
-	}
-
-	ctx.stroke();
+function init() {
+	snake_head_cell = new SnakeSegment(DIRECTION.RIGHT, [1, 1]);
+	snake_tail_cell = snake_head_cell;
 	
-	if (!gameOver) snake_head_cell.draw();
-	else snake_head_cell.next_segment.drawDead();
+	for (let j = 0; j < BOARD_SIZE; j++) {
+		for (let i = 0; i < BOARD_SIZE; i++) {
+			board_state.push([i, j, 0]);
+		}
+	}
+	
+	apple = new SnakeSegment(DIRECTION.RIGHT, [0, 0]);
 
+	spawnApple();
+
+	createGraph();
+	
+	GAME_BOARD = document.getElementById("gameBoard") as HTMLCanvasElement;
+	PATH_BOARD = document.getElementById("pathBoard") as HTMLCanvasElement;
+	PHANTOM_BOARD = document.getElementById("phantomBoard") as HTMLCanvasElement;
+	window.snake_canvas = GAME_BOARD;
+	ctx = GAME_BOARD.getContext("2d");
+	path_ctx = PATH_BOARD.getContext("2d", { alpha: false });
+	phantom_ctx = PHANTOM_BOARD.getContext("2d");
+	
+	ctx.imageSmoothingEnabled = false;
+	
+	sprite_sheet = document.getElementById("spriteSheet") as HTMLImageElement;
+	
 	requestAnimationFrame(drawBoard);
 }
 
-requestAnimationFrame(drawBoard);
+init();
 
+
+// Establish event listeners for manual controls
 document.addEventListener("keydown", (event) => {
 	if (event.repeat) return;
 	switch (event.key) {
 		case "ArrowRight":
-			moveQueue.push(DIRECTION.RIGHT);
+			move_queue.push(DIRECTION.RIGHT);
 			break;
 		case "ArrowUp":
-			moveQueue.push(DIRECTION.UP);
+			move_queue.push(DIRECTION.UP);
 			break;
 		case "ArrowLeft":
-			moveQueue.push(DIRECTION.LEFT);
+			move_queue.push(DIRECTION.LEFT);
 			break;
 		case "ArrowDown":
-			moveQueue.push(DIRECTION.DOWN);
+			move_queue.push(DIRECTION.DOWN);
 			break;
 		case "Escape":
-			gamePaused = !gamePaused;
+			game_paused = !game_paused;
 	}
 })

@@ -76,3 +76,5 @@ type sprites = "0" |
 "deadLeft" |
 "deadRight" |
 "deadUp";
+
+export { SHEET, sprites };

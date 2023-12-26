@@ -8,9 +8,9 @@
     "alwaysStrict": true,
     "allowJs": true,
     "outDir": "js",
-    
+    "rootDir": "ts"
   },
   "lib": ["ES2021"],
-  "include": ["packages/*", "ts/*", "ts/**/*"],
+  "include": ["ts/*", "ts/**/*"],
   "exclude": []
 }
